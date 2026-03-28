@@ -1,10 +1,24 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Network, ChevronRight, Trash2, Clock, History, Maximize2, X, GitBranch, Layers } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import type { ExplorationNode, RubricScores } from "./ExplorationCard";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  useNodesState,
+  useEdgesState,
+  type Node,
+  type Edge,
+  MarkerType,
+  Position,
+  Handle,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 
 /* ── Types ── */
 interface HistorySession {
@@ -15,15 +29,6 @@ interface HistorySession {
   nodes: ExplorationNode[];
 }
 
-interface TreeNode {
-  label: string;
-  mode: string;
-  depth: number;
-  children: TreeNode[];
-  isSession?: boolean;
-  sessionId?: string;
-}
-
 interface KnowledgeMapProps {
   currentNodes: { query: string; depth: number }[];
   currentSessionId: string;
@@ -32,18 +37,27 @@ interface KnowledgeMapProps {
   onRestoreSession: (nodes: ExplorationNode[]) => void;
 }
 
-const modeColors: Record<string, { bg: string; border: string; text: string; dot: string }> = {
-  child: { bg: "fill-emerald-500/15", border: "stroke-emerald-500/40", text: "fill-emerald-300", dot: "fill-emerald-400" },
-  student: { bg: "fill-blue-500/15", border: "stroke-blue-500/40", text: "fill-blue-300", dot: "fill-blue-400" },
-  professional: { bg: "fill-amber-500/15", border: "stroke-amber-500/40", text: "fill-amber-300", dot: "fill-amber-400" },
-  parent: { bg: "fill-pink-500/15", border: "stroke-pink-500/40", text: "fill-pink-300", dot: "fill-pink-400" },
-  research: { bg: "fill-violet-500/15", border: "stroke-violet-500/40", text: "fill-violet-300", dot: "fill-violet-400" },
+const modeColorMap: Record<string, { bg: string; border: string; glow: string; dot: string; text: string }> = {
+  child: { bg: "rgba(16, 185, 129, 0.12)", border: "rgba(16, 185, 129, 0.5)", glow: "rgba(16, 185, 129, 0.25)", dot: "#10b981", text: "#6ee7b7" },
+  student: { bg: "rgba(59, 130, 246, 0.12)", border: "rgba(59, 130, 246, 0.5)", glow: "rgba(59, 130, 246, 0.25)", dot: "#3b82f6", text: "#93c5fd" },
+  professional: { bg: "rgba(245, 158, 11, 0.12)", border: "rgba(245, 158, 11, 0.5)", glow: "rgba(245, 158, 11, 0.25)", dot: "#f59e0b", text: "#fcd34d" },
+  parent: { bg: "rgba(236, 72, 153, 0.12)", border: "rgba(236, 72, 153, 0.5)", glow: "rgba(236, 72, 153, 0.25)", dot: "#ec4899", text: "#f9a8d4" },
+  research: { bg: "rgba(139, 92, 246, 0.12)", border: "rgba(139, 92, 246, 0.5)", glow: "rgba(139, 92, 246, 0.25)", dot: "#8b5cf6", text: "#c4b5fd" },
 };
 
 const modeLabels: Record<string, string> = {
   child: "🧒 Child", student: "📚 Student", professional: "💼 Professional",
   parent: "👨‍👩‍👧 Parent", research: "🔬 Research",
 };
+
+const depthColors = [
+  { bg: "rgba(56, 189, 248, 0.15)", border: "rgba(56, 189, 248, 0.6)", text: "#7dd3fc" },
+  { bg: "rgba(52, 211, 153, 0.15)", border: "rgba(52, 211, 153, 0.6)", text: "#6ee7b7" },
+  { bg: "rgba(251, 191, 36, 0.15)", border: "rgba(251, 191, 36, 0.6)", text: "#fcd34d" },
+  { bg: "rgba(244, 114, 182, 0.15)", border: "rgba(244, 114, 182, 0.6)", text: "#f9a8d4" },
+  { bg: "rgba(167, 139, 250, 0.15)", border: "rgba(167, 139, 250, 0.6)", text: "#c4b5fd" },
+  { bg: "rgba(248, 113, 113, 0.15)", border: "rgba(248, 113, 113, 0.6)", text: "#fca5a5" },
+];
 
 const formatDate = (dateStr: string) => {
   const d = new Date(dateStr);
@@ -53,6 +67,229 @@ const formatDate = (dateStr: string) => {
   if (diffDays === 1) return "Yesterday";
   if (diffDays < 7) return `${diffDays}d ago`;
   return d.toLocaleDateString();
+};
+
+/* ── Custom Node Component ── */
+interface GraphNodeData {
+  label: string;
+  depth: number;
+  mode: string;
+  isExplored: boolean;
+  isCurrent: boolean;
+  isSession: boolean;
+  onClick?: () => void;
+  [key: string]: unknown;
+}
+
+const GraphNode = ({ data }: { data: GraphNodeData }) => {
+  const dc = depthColors[data.depth % depthColors.length];
+  const mc = modeColorMap[data.mode] || modeColorMap.student;
+  const isCurrent = data.isCurrent;
+  const isExplored = data.isExplored;
+  const isSession = data.isSession;
+
+  return (
+    <div
+      onClick={data.onClick}
+      className="relative group transition-all duration-300"
+      style={{ cursor: data.onClick ? "pointer" : "default" }}
+    >
+      <Handle type="target" position={Position.Top} className="!bg-transparent !border-0 !w-0 !h-0" />
+      {isCurrent && (
+        <div
+          className="absolute -inset-1.5 rounded-xl animate-pulse-glow"
+          style={{ background: mc.glow, filter: "blur(8px)" }}
+        />
+      )}
+      <div
+        className="relative px-4 py-2.5 rounded-xl backdrop-blur-sm transition-all duration-200 group-hover:scale-105"
+        style={{
+          background: isSession ? "rgba(30, 41, 59, 0.9)" : isCurrent ? mc.bg : dc.bg,
+          border: `1.5px ${isExplored ? "solid" : "dashed"} ${isCurrent ? mc.border : isSession ? "rgba(100,116,139,0.4)" : dc.border}`,
+          boxShadow: isCurrent ? `0 0 20px ${mc.glow}` : "none",
+          minWidth: isSession ? 160 : 140,
+          maxWidth: 220,
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <div
+            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+            style={{
+              background: isSession ? mc.dot : isCurrent ? mc.dot : dc.border,
+              boxShadow: `0 0 6px ${isSession ? mc.dot : dc.border}`,
+            }}
+          />
+          <span
+            className="text-xs font-medium truncate select-none"
+            style={{ color: isSession ? mc.text : isCurrent ? mc.text : dc.text }}
+          >
+            {data.label.length > 28 ? data.label.slice(0, 28) + "…" : data.label}
+          </span>
+        </div>
+        {!isSession && data.depth > 0 && (
+          <div
+            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold"
+            style={{ background: dc.border, color: "#0f172a" }}
+          >
+            {data.depth}
+          </div>
+        )}
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bg-transparent !border-0 !w-0 !h-0" />
+    </div>
+  );
+};
+
+const nodeTypes = { graphNode: GraphNode };
+
+/* ── Fullscreen React Flow Graph ── */
+interface FullscreenGraphProps {
+  currentNodes: { query: string; depth: number }[];
+  sessions: HistorySession[];
+  mode: string;
+  onNodeClick: (index: number) => void;
+  onRestoreSession: (nodes: ExplorationNode[]) => void;
+}
+
+const FullscreenGraph = ({ currentNodes, sessions, mode, onNodeClick, onRestoreSession }: FullscreenGraphProps) => {
+  const { flowNodes, flowEdges } = useMemo(() => {
+    const nodes: Node[] = [];
+    const edges: Edge[] = [];
+    const mc = modeColorMap[mode] || modeColorMap.student;
+
+    if (currentNodes.length > 0) {
+      const rootId = "current-root";
+      nodes.push({
+        id: rootId,
+        type: "graphNode",
+        position: { x: 400, y: 50 },
+        data: { label: `🎯 Current Session (${modeLabels[mode]})`, depth: 0, mode, isExplored: true, isCurrent: false, isSession: true },
+      });
+
+      currentNodes.forEach((n, i) => {
+        const nodeId = `current-${i}`;
+        const parentId = i === 0 ? rootId : `current-${i - 1}`;
+        const xOffset = (i % 2 === 0 ? -1 : 1) * (Math.floor(i / 2) * 30);
+        nodes.push({
+          id: nodeId,
+          type: "graphNode",
+          position: { x: 400 + xOffset, y: 140 + i * 100 },
+          data: { label: n.query, depth: n.depth, mode, isExplored: true, isCurrent: i === currentNodes.length - 1, isSession: false, onClick: () => onNodeClick(i) },
+        });
+        edges.push({
+          id: `e-${parentId}-${nodeId}`,
+          source: parentId,
+          target: nodeId,
+          animated: i === currentNodes.length - 1,
+          style: { stroke: mc.border, strokeWidth: 2 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: mc.dot, width: 12, height: 12 },
+        });
+      });
+    }
+
+    let sessionX = currentNodes.length > 0 ? 800 : 200;
+    sessions.forEach((session, si) => {
+      const sessionMc = modeColorMap[session.mode] || modeColorMap.student;
+      const sessRootId = `sess-${si}`;
+      nodes.push({
+        id: sessRootId,
+        type: "graphNode",
+        position: { x: sessionX, y: 50 },
+        data: { label: `${modeLabels[session.mode]} · ${formatDate(session.created_at)}`, depth: 0, mode: session.mode, isExplored: true, isCurrent: false, isSession: true, onClick: () => onRestoreSession(session.nodes) },
+      });
+      session.queries.forEach((q, qi) => {
+        const nodeId = `sess-${si}-q-${qi}`;
+        const parentId = qi === 0 ? sessRootId : `sess-${si}-q-${qi - 1}`;
+        nodes.push({
+          id: nodeId,
+          type: "graphNode",
+          position: { x: sessionX + (qi % 2 === 0 ? -20 : 20), y: 140 + qi * 90 },
+          data: { label: q, depth: qi + 1, mode: session.mode, isExplored: true, isCurrent: false, isSession: false, onClick: () => onRestoreSession(session.nodes) },
+        });
+        edges.push({
+          id: `e-${parentId}-${nodeId}`,
+          source: parentId,
+          target: nodeId,
+          style: { stroke: sessionMc.border, strokeWidth: 1.5, strokeDasharray: "6 3" },
+          markerEnd: { type: MarkerType.ArrowClosed, color: sessionMc.dot, width: 10, height: 10 },
+        });
+      });
+      sessionX += 300;
+    });
+
+    return { flowNodes: nodes, flowEdges: edges };
+  }, [currentNodes, sessions, mode, onNodeClick, onRestoreSession]);
+
+  const [nodes, , onNodesChange] = useNodesState(flowNodes);
+  const [edgesState, , onEdgesChange] = useEdgesState(flowEdges);
+
+  useEffect(() => {
+    onNodesChange(flowNodes.map(n => ({ type: "reset" as const, item: n })));
+    onEdgesChange(flowEdges.map(e => ({ type: "reset" as const, item: e })));
+  }, [flowNodes, flowEdges]);
+
+  if (flowNodes.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full text-muted-foreground">
+        <div className="text-center">
+          <GitBranch className="w-12 h-12 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">No exploration data yet</p>
+          <p className="text-xs mt-1">Start exploring to build your knowledge map</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-full">
+      <ReactFlow
+        nodes={nodes}
+        edges={edgesState}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        nodeTypes={nodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.3 }}
+        minZoom={0.2}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="hsl(220 14% 18%)" gap={20} size={1} />
+        <Controls className="!bg-card/80 !border-border !rounded-xl !shadow-lg [&>button]:!bg-secondary/60 [&>button]:!border-border [&>button]:!text-foreground [&>button:hover]:!bg-primary/20" />
+        <MiniMap
+          nodeColor={(n) => {
+            const d = n.data as GraphNodeData;
+            const mc2 = modeColorMap[d.mode] || modeColorMap.student;
+            return mc2.dot;
+          }}
+          maskColor="rgba(15, 23, 42, 0.8)"
+          className="!bg-card/60 !border-border !rounded-xl"
+        />
+      </ReactFlow>
+      {/* Depth legend */}
+      <div className="absolute bottom-4 left-4 glass-panel p-3 z-10">
+        <p className="text-[10px] text-muted-foreground font-semibold mb-2 uppercase tracking-wider">Depth</p>
+        <div className="flex gap-2">
+          {depthColors.slice(0, 5).map((dc2, i) => (
+            <div key={i} className="flex items-center gap-1">
+              <div className="w-3 h-3 rounded-full" style={{ background: dc2.border, boxShadow: `0 0 4px ${dc2.border}` }} />
+              <span className="text-[9px] text-muted-foreground">L{i + 1}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-3 mt-2 pt-2 border-t border-border/30">
+          <div className="flex items-center gap-1">
+            <div className="w-6 h-0.5 border-t-2 border-solid" style={{ borderColor: "rgba(148,163,184,0.4)" }} />
+            <span className="text-[9px] text-muted-foreground">Explored</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-6 h-0.5 border-t-2 border-dashed" style={{ borderColor: "rgba(148,163,184,0.4)" }} />
+            <span className="text-[9px] text-muted-foreground">History</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 /* ── Sidebar compact view ── */
@@ -104,48 +341,6 @@ const KnowledgeMap = ({ currentNodes, currentSessionId, mode, onNodeClick, onRes
     setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
   };
 
-  // Build tree for fullscreen view
-  const treeData = useMemo(() => {
-    const roots: TreeNode[] = [];
-
-    // Current session
-    if (currentNodes.length > 0) {
-      const current: TreeNode = { label: "Current Session", mode, depth: 0, children: [], isSession: true };
-      let parent = current;
-      currentNodes.forEach((n, i) => {
-        const child: TreeNode = { label: n.query, mode, depth: i + 1, children: [] };
-        if (i === 0) current.children.push(child);
-        else parent.children.push(child);
-        parent = child;
-      });
-      roots.push(current);
-    }
-
-    // History sessions grouped by mode
-    const byMode: Record<string, HistorySession[]> = {};
-    sessions.forEach((s) => {
-      if (!byMode[s.mode]) byMode[s.mode] = [];
-      byMode[s.mode].push(s);
-    });
-
-    Object.entries(byMode).forEach(([m, modeSessions]) => {
-      const modeRoot: TreeNode = { label: modeLabels[m] || m, mode: m, depth: 0, children: [], isSession: true };
-      modeSessions.forEach((s) => {
-        const sessNode: TreeNode = { label: s.queries[0] || "Session", mode: m, depth: 1, children: [], isSession: true, sessionId: s.session_id };
-        let parent = sessNode;
-        s.queries.slice(1).forEach((q, i) => {
-          const child: TreeNode = { label: q, mode: m, depth: i + 2, children: [] };
-          parent.children.push(child);
-          parent = child;
-        });
-        modeRoot.children.push(sessNode);
-      });
-      roots.push(modeRoot);
-    });
-
-    return roots;
-  }, [currentNodes, sessions, mode]);
-
   return (
     <>
       <div className="glass-panel p-3">
@@ -163,32 +358,49 @@ const KnowledgeMap = ({ currentNodes, currentSessionId, mode, onNodeClick, onRes
           </button>
         </div>
 
-        {/* Current session mini-graph */}
         {currentNodes.length > 0 && (
           <div className="mb-3">
             <p className="text-[10px] text-muted-foreground mb-1.5 uppercase tracking-wider">Current · {modeLabels[mode]}</p>
             <div className="space-y-0.5 max-h-32 overflow-y-auto" style={{ scrollbarWidth: "thin" }}>
-              {currentNodes.map((node, i) => (
-                <motion.button
-                  key={i}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                  onClick={() => onNodeClick(i)}
-                  className={`w-full text-left flex items-center gap-1.5 px-2 py-1 rounded text-[11px] transition-colors hover:bg-secondary/40 ${
-                    i === currentNodes.length - 1 ? "text-primary font-medium" : "text-muted-foreground"
-                  }`}
-                  style={{ paddingLeft: `${8 + node.depth * 12}px` }}
-                >
-                  <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${i === currentNodes.length - 1 ? "bg-primary" : "bg-muted-foreground/40"}`} />
-                  <span className="truncate">{node.query}</span>
-                </motion.button>
-              ))}
+              {currentNodes.map((node, i) => {
+                const dc = depthColors[i % depthColors.length];
+                return (
+                  <motion.button
+                    key={i}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.03 }}
+                    onClick={() => onNodeClick(i)}
+                    className="w-full text-left flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] transition-all hover:scale-[1.02]"
+                    style={{
+                      paddingLeft: `${8 + node.depth * 12}px`,
+                      background: i === currentNodes.length - 1 ? (modeColorMap[mode]?.bg || "transparent") : "transparent",
+                      borderLeft: `2px solid ${dc.border}`,
+                    }}
+                  >
+                    <div
+                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{
+                        background: dc.border,
+                        boxShadow: i === currentNodes.length - 1 ? `0 0 6px ${dc.border}` : "none",
+                      }}
+                    />
+                    <span className="truncate" style={{ color: i === currentNodes.length - 1 ? dc.text : "hsl(215 15% 55%)" }}>
+                      {node.query}
+                    </span>
+                    {i === currentNodes.length - 1 && (
+                      <span className="text-[8px] ml-auto flex-shrink-0 px-1.5 py-0.5 rounded-full font-bold"
+                        style={{ background: dc.border, color: "#0f172a" }}>
+                        L{node.depth}
+                      </span>
+                    )}
+                  </motion.button>
+                );
+              })}
             </div>
           </div>
         )}
 
-        {/* History sessions */}
         <div className="border-t border-border/30 pt-2">
           <p className="text-[10px] text-muted-foreground mb-1.5 uppercase tracking-wider flex items-center gap-1">
             <History className="w-3 h-3" /> Past Sessions
@@ -201,244 +413,71 @@ const KnowledgeMap = ({ currentNodes, currentSessionId, mode, onNodeClick, onRes
             <p className="text-[10px] text-muted-foreground text-center py-2">No past sessions</p>
           ) : (
             <div className="space-y-0.5 max-h-40 overflow-y-auto" style={{ scrollbarWidth: "thin" }}>
-              {sessions.map((s) => (
-                <div key={s.session_id} className="rounded overflow-hidden">
-                  <button
-                    onClick={() => setExpanded(expanded === s.session_id ? null : s.session_id)}
-                    className="w-full p-2 flex items-center gap-1.5 text-left hover:bg-secondary/30 transition-colors"
-                  >
-                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      s.mode === "child" ? "bg-emerald-400" : s.mode === "student" ? "bg-blue-400" :
-                      s.mode === "professional" ? "bg-amber-400" : s.mode === "parent" ? "bg-pink-400" : "bg-violet-400"
-                    }`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[11px] text-foreground truncate">{s.queries[0]}</p>
-                      <p className="text-[9px] text-muted-foreground">{formatDate(s.created_at)} · {s.queries.length} deep · {modeLabels[s.mode]}</p>
-                    </div>
-                    <ChevronRight className={`w-3 h-3 text-muted-foreground transition-transform ${expanded === s.session_id ? "rotate-90" : ""}`} />
-                  </button>
-                  <AnimatePresence>
-                    {expanded === s.session_id && (
-                      <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden">
-                        <div className="px-2 pb-2 space-y-0.5">
-                          {s.queries.map((q, i) => (
-                            <p key={i} className="text-[10px] text-muted-foreground truncate" style={{ paddingLeft: `${8 + i * 8}px` }}>
-                              <span className="text-primary/50">↳</span> {q}
-                            </p>
-                          ))}
-                          <div className="flex gap-2 pt-1">
-                            <button onClick={() => onRestoreSession(s.nodes)} className="text-[10px] text-primary hover:underline">Restore</button>
-                            <button onClick={() => deleteSession(s.session_id)} className="text-[10px] text-destructive hover:underline flex items-center gap-0.5">
-                              <Trash2 className="w-2.5 h-2.5" /> Delete
-                            </button>
+              {sessions.map((s) => {
+                const mc = modeColorMap[s.mode] || modeColorMap.student;
+                return (
+                  <div key={s.session_id} className="rounded overflow-hidden">
+                    <button
+                      onClick={() => setExpanded(expanded === s.session_id ? null : s.session_id)}
+                      className="w-full p-2 flex items-center gap-1.5 text-left hover:bg-secondary/30 transition-colors"
+                    >
+                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: mc.dot, boxShadow: `0 0 4px ${mc.dot}` }} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] text-foreground truncate">{s.queries[0]}</p>
+                        <p className="text-[9px] text-muted-foreground">{formatDate(s.created_at)} · {s.queries.length} deep · {modeLabels[s.mode]}</p>
+                      </div>
+                      <ChevronRight className={`w-3 h-3 text-muted-foreground transition-transform ${expanded === s.session_id ? "rotate-90" : ""}`} />
+                    </button>
+                    <AnimatePresence>
+                      {expanded === s.session_id && (
+                        <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden">
+                          <div className="px-2 pb-2 space-y-0.5">
+                            {s.queries.map((q, i) => (
+                              <p key={i} className="text-[10px] text-muted-foreground truncate" style={{ paddingLeft: `${8 + i * 8}px` }}>
+                                <span style={{ color: mc.dot }}>↳</span> {q}
+                              </p>
+                            ))}
+                            <div className="flex gap-2 pt-1">
+                              <button onClick={() => onRestoreSession(s.nodes)} className="text-[10px] text-primary hover:underline">Restore</button>
+                              <button onClick={() => deleteSession(s.session_id)} className="text-[10px] text-destructive hover:underline flex items-center gap-0.5">
+                                <Trash2 className="w-2.5 h-2.5" /> Delete
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       </div>
 
-      {/* Fullscreen interactive graph */}
       <Dialog open={fullscreen} onOpenChange={setFullscreen}>
         <DialogContent className="max-w-[95vw] w-[95vw] max-h-[90vh] h-[90vh] bg-background/95 backdrop-blur-xl border-border p-0 overflow-hidden">
           <DialogHeader className="px-6 pt-5 pb-3 border-b border-border/30">
             <DialogTitle className="flex items-center gap-2 text-foreground font-display">
               <Network className="w-5 h-5 text-primary" />
-              Knowledge Map — Full View
+              Knowledge Graph
+              <span className="text-xs text-muted-foreground font-normal ml-2">
+                Drag to pan · Scroll to zoom · Click nodes to explore
+              </span>
             </DialogTitle>
           </DialogHeader>
-          <div className="flex-1 overflow-auto p-6">
+          <div className="flex-1 h-[calc(90vh-80px)]">
             <FullscreenGraph
-              treeData={treeData}
-              onRestoreSession={(sid) => {
-                const s = sessions.find((x) => x.session_id === sid);
-                if (s) { onRestoreSession(s.nodes); setFullscreen(false); }
-              }}
+              currentNodes={currentNodes}
+              sessions={sessions}
+              mode={mode}
+              onNodeClick={onNodeClick}
+              onRestoreSession={onRestoreSession}
             />
           </div>
         </DialogContent>
       </Dialog>
     </>
-  );
-};
-
-/* ── Fullscreen interactive tree ── */
-interface FullscreenGraphProps {
-  treeData: TreeNode[];
-  onRestoreSession: (sessionId: string) => void;
-}
-
-interface LayoutNode {
-  node: TreeNode;
-  x: number;
-  y: number;
-  parentX?: number;
-  parentY?: number;
-}
-
-const FullscreenGraph = ({ treeData, onRestoreSession }: FullscreenGraphProps) => {
-  const [hoveredLabel, setHoveredLabel] = useState<string | null>(null);
-
-  // Flatten tree into positioned nodes
-  const { layoutNodes, svgWidth, svgHeight } = useMemo(() => {
-    const nodes: LayoutNode[] = [];
-    const nodeW = 200;
-    const nodeH = 36;
-    const gapX = 40;
-    const gapY = 60;
-    let currentX = 40;
-
-    const layoutTree = (treeNode: TreeNode, depth: number, parentX?: number, parentY?: number) => {
-      const x = currentX;
-      const y = 40 + depth * (nodeH + gapY);
-      nodes.push({ node: treeNode, x, y, parentX, parentY });
-
-      if (treeNode.children.length === 0) {
-        currentX += nodeW + gapX;
-      } else {
-        treeNode.children.forEach((child) => {
-          layoutTree(child, depth + 1, x + nodeW / 2, y + nodeH);
-        });
-      }
-    };
-
-    treeData.forEach((root) => {
-      layoutTree(root, 0);
-      currentX += 20; // gap between root groups
-    });
-
-    return {
-      layoutNodes: nodes,
-      svgWidth: Math.max(currentX, 600),
-      svgHeight: Math.max(...nodes.map((n) => n.y + 60), 400),
-    };
-  }, [treeData]);
-
-  if (treeData.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        <div className="text-center">
-          <GitBranch className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">No exploration data yet</p>
-          <p className="text-xs mt-1">Start exploring to build your knowledge map</p>
-        </div>
-      </div>
-    );
-  }
-
-  const nodeW = 200;
-  const nodeH = 36;
-
-  return (
-    <div className="overflow-auto w-full h-full" style={{ scrollbarWidth: "thin" }}>
-      <svg width={svgWidth} height={svgHeight} className="min-w-full">
-        <defs>
-          <filter id="glow">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          {/* Gradient for connectors per mode */}
-          {Object.entries(modeColors).map(([m]) => (
-            <linearGradient key={m} id={`grad-${m}`} x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor={
-                m === "child" ? "hsl(160 72% 50%)" : m === "student" ? "hsl(217 72% 60%)" :
-                m === "professional" ? "hsl(38 92% 50%)" : m === "parent" ? "hsl(340 72% 60%)" : "hsl(270 72% 60%)"
-              } stopOpacity="0.6" />
-              <stop offset="100%" stopColor={
-                m === "child" ? "hsl(160 72% 50%)" : m === "student" ? "hsl(217 72% 60%)" :
-                m === "professional" ? "hsl(38 92% 50%)" : m === "parent" ? "hsl(340 72% 60%)" : "hsl(270 72% 60%)"
-              } stopOpacity="0.2" />
-            </linearGradient>
-          ))}
-        </defs>
-
-        {/* Connector lines */}
-        {layoutNodes.filter((n) => n.parentX != null).map((n, i) => (
-          <motion.path
-            key={`line-${i}`}
-            initial={{ pathLength: 0, opacity: 0 }}
-            animate={{ pathLength: 1, opacity: 1 }}
-            transition={{ duration: 0.5, delay: i * 0.02 }}
-            d={`M ${n.parentX} ${n.parentY} C ${n.parentX} ${n.parentY! + 30}, ${n.x + nodeW / 2} ${n.y - 30}, ${n.x + nodeW / 2} ${n.y}`}
-            fill="none"
-            stroke={`url(#grad-${n.node.mode})`}
-            strokeWidth={2}
-            strokeDasharray={n.node.isSession ? "none" : "6 3"}
-          />
-        ))}
-
-        {/* Nodes */}
-        {layoutNodes.map((ln, i) => {
-          const isHovered = hoveredLabel === ln.node.label;
-          const isSession = ln.node.isSession;
-          const modeColor = ln.node.mode;
-          const dotColor = modeColor === "child" ? "hsl(160 72% 50%)" : modeColor === "student" ? "hsl(217 72% 60%)" :
-            modeColor === "professional" ? "hsl(38 92% 50%)" : modeColor === "parent" ? "hsl(340 72% 60%)" : "hsl(270 72% 60%)";
-
-          return (
-            <motion.g
-              key={`node-${i}`}
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.3, delay: i * 0.03 }}
-              onMouseEnter={() => setHoveredLabel(ln.node.label)}
-              onMouseLeave={() => setHoveredLabel(null)}
-              onClick={() => ln.node.sessionId && onRestoreSession(ln.node.sessionId)}
-              className={ln.node.sessionId ? "cursor-pointer" : ""}
-            >
-              {/* Shadow/glow */}
-              {isHovered && (
-                <rect x={ln.x - 2} y={ln.y - 2} width={nodeW + 4} height={nodeH + 4} rx={10} fill={dotColor} opacity={0.15} filter="url(#glow)" />
-              )}
-              <rect
-                x={ln.x} y={ln.y} width={nodeW} height={nodeH} rx={8}
-                fill={isSession ? "hsl(220 18% 13%)" : "hsl(220 18% 10%)"}
-                stroke={isHovered ? dotColor : "hsl(220 14% 20%)"}
-                strokeWidth={isHovered ? 2 : 1}
-                opacity={0.95}
-              />
-              {/* Mode dot */}
-              <circle cx={ln.x + 14} cy={ln.y + nodeH / 2} r={4} fill={dotColor} />
-              {/* Depth indicator */}
-              {!isSession && ln.node.depth > 0 && (
-                <text x={ln.x + nodeW - 12} y={ln.y + nodeH / 2 + 3} fontSize={8} fill="hsl(220 14% 45%)" textAnchor="end">
-                  L{ln.node.depth}
-                </text>
-              )}
-              {/* Label */}
-              <text x={ln.x + 26} y={ln.y + nodeH / 2 + 4} fontSize={isSession ? 11 : 10} fontWeight={isSession ? 600 : 400}
-                fill={isHovered ? dotColor : "hsl(210 40% 90%)"} className="select-none">
-                {ln.node.label.length > 22 ? ln.node.label.slice(0, 22) + "…" : ln.node.label}
-              </text>
-            </motion.g>
-          );
-        })}
-
-        {/* Legend */}
-        <g transform={`translate(${svgWidth - 180}, 10)`}>
-          <rect x={0} y={0} width={170} height={Object.keys(modeLabels).length * 20 + 30} rx={8} fill="hsl(220 18% 10% / 0.9)" stroke="hsl(220 14% 20%)" />
-          <text x={12} y={18} fontSize={10} fontWeight={600} fill="hsl(210 40% 80%)">Mode Legend</text>
-          {Object.entries(modeLabels).map(([m, label], idx) => {
-            const dotColor = m === "child" ? "hsl(160 72% 50%)" : m === "student" ? "hsl(217 72% 60%)" :
-              m === "professional" ? "hsl(38 92% 50%)" : m === "parent" ? "hsl(340 72% 60%)" : "hsl(270 72% 60%)";
-            return (
-              <g key={m} transform={`translate(12, ${30 + idx * 20})`}>
-                <circle cx={6} cy={0} r={4} fill={dotColor} />
-                <text x={16} y={4} fontSize={10} fill="hsl(210 40% 80%)">{label}</text>
-              </g>
-            );
-          })}
-        </g>
-      </svg>
-    </div>
   );
 };
 
