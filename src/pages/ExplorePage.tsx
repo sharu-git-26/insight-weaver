@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Brain, Search, ArrowRight, Loader2,
   Baby, GraduationCap, Briefcase, Users, FlaskConical,
-  PanelLeftClose, PanelLeftOpen, Sparkles, LogOut, ImageIcon,
+  PanelLeftClose, PanelLeftOpen, Sparkles, LogOut, ImageIcon, Plus,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
