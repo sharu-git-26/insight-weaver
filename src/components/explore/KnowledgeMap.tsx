@@ -220,13 +220,13 @@ const FullscreenGraph = ({ currentNodes, sessions, mode, onNodeClick, onRestoreS
     return { flowNodes: nodes, flowEdges: edges };
   }, [currentNodes, sessions, mode, onNodeClick, onRestoreSession]);
 
-  const [nodes, , onNodesChange] = useNodesState(flowNodes);
-  const [edgesState, , onEdgesChange] = useEdgesState(flowEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
+  const [edgesState, setEdges, onEdgesChange] = useEdgesState(flowEdges);
 
   useEffect(() => {
-    onNodesChange(flowNodes.map(n => ({ type: "reset" as const, item: n })));
-    onEdgesChange(flowEdges.map(e => ({ type: "reset" as const, item: e })));
-  }, [flowNodes, flowEdges]);
+    setNodes(flowNodes);
+    setEdges(flowEdges);
+  }, [flowNodes, flowEdges, setNodes, setEdges]);
 
   if (flowNodes.length === 0) {
     return (
