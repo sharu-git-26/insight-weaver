@@ -173,6 +173,16 @@ const ExplorePage = () => {
     navigate("/");
   };
 
+  const handleNewChat = () => {
+    handleReset();
+    toast.success("New chat started!");
+  };
+
+  // Extract display name from email
+  const displayName = user?.email
+    ? user.email.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    : "Explorer";
+
   const graphNodes = explorationStack.map((n, i) => ({ query: n.query, depth: i }));
 
   if (!user) return null;
