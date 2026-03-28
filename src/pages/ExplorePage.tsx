@@ -205,7 +205,17 @@ const ExplorePage = () => {
             <span className="text-muted-foreground text-sm hidden sm:inline">Recursive Understanding Engine</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground hidden md:inline">{user.email}</span>
+            <span className="text-xs text-muted-foreground hidden md:inline">Hi, {displayName} 👋</span>
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={handleNewChat}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-sm text-primary hover:bg-primary/20 transition-all"
+              title="Start new chat"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">New Chat</span>
+            </motion.button>
             <button
               onClick={() => navigate("/mode-select")}
               className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/50 border border-border text-sm hover:border-primary/30 transition-colors"
