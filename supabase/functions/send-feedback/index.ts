@@ -48,13 +48,23 @@ serve(async (req) => {
     // Forward to n8n webhook (best-effort)
     const webhookUrl = "https://mssharmila.app.n8n.cloud/webhook/user-feedback";
 
+    const isSupportRequest = feedback.startsWith("[SUPPORT REQUEST]");
+    const ratingStars = rating > 0 ? "⭐".repeat(rating) + ` (${rating}/5)` : "No rating";
+
     const payload = {
       rating,
+      ratingDisplay: ratingStars,
       feedback,
       userEmail: userEmail || "anonymous",
       timestamp,
-      source: "RUE Feedback Panel",
+      source: isSupportRequest ? "RUE Support Request" : "RUE Feedback Panel",
       adminEmail: ADMIN_EMAIL,
+      subject: isSupportRequest
+        ? `[RUE Support] Request from ${userEmail || "anonymous"}`
+        : `[RUE Feedback] ${ratingStars} from ${userEmail || "anonymous"}`,
+      emailBody: isSupportRequest
+        ? `Support request from: ${userEmail || "anonymous"}\n\n${feedback}`
+        : `Feedback from: ${userEmail || "anonymous"}\nRating: ${ratingStars}\n\nMessage:\n${feedback || "(No message provided)"}`,
     };
 
     try {
