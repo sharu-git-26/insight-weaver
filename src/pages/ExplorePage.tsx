@@ -309,7 +309,7 @@ const ExplorePage = () => {
                     <Brain className="w-16 h-16 text-primary mx-auto mb-6 opacity-60" />
                   </motion.div>
                   <h2 className="text-2xl font-display font-bold text-foreground mb-3">
-                    What do you want to understand?
+                    Hi {displayName}! 👋 What do you want to understand?
                   </h2>
                   <p className="text-muted-foreground mb-8 max-w-md mx-auto">
                     Ask any question. We'll break it down layer by layer until you truly get it.
